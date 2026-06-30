@@ -86,7 +86,9 @@ def train():
                 input_text_ids = input_ids[:, :, 0]
                 input_codec_ids = input_ids[:, :, 1]
 
-                input_text_embedding = model.talker.model.text_embedding(input_text_ids) * text_embedding_mask
+                input_text_embedding = model.talker.model.text_embedding(input_text_ids)
+                input_text_embedding = model.talker.text_projection(input_text_embedding)   # 2048 -> 1024
+                input_text_embedding = input_text_embedding * text_embedding_mask           # re-zero padding after projection
                 input_codec_embedding = model.talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
                 input_codec_embedding[:, 6, :] = speaker_embedding
 
