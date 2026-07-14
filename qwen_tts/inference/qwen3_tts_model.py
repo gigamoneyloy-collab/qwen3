@@ -26,6 +26,7 @@ import soundfile as sf
 import torch
 from transformers import AutoConfig, AutoModel, AutoProcessor
 
+from .backend_utils import resolve_model_load_kwargs
 from ..core.models import Qwen3TTSConfig, Qwen3TTSForConditionalGeneration, Qwen3TTSProcessor
 
 AudioLike = Union[
@@ -109,7 +110,8 @@ class Qwen3TTSModel:
         AutoModel.register(Qwen3TTSConfig, Qwen3TTSForConditionalGeneration)
         AutoProcessor.register(Qwen3TTSConfig, Qwen3TTSProcessor)
 
-        model = AutoModel.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        model_load_kwargs = resolve_model_load_kwargs(kwargs)
+        model = AutoModel.from_pretrained(pretrained_model_name_or_path, **model_load_kwargs)
         if not isinstance(model, Qwen3TTSForConditionalGeneration):
             raise TypeError(
                 f"AutoModel returned {type(model)}, expected Qwen3TTSForConditionalGeneration. "

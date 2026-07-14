@@ -13,26 +13,31 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import time
 import torch
 import soundfile as sf
 
 from qwen_tts import Qwen3TTSModel
+from qwen_tts.inference.backend_utils import default_device, normalize_attn_implementation, normalize_dtype_for_device, synchronize_device
 
 
 def main():
-    device = "cuda:0"
+    device = default_device()
+    dtype = normalize_dtype_for_device(torch.bfloat16, device)
     MODEL_PATH = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign/"
+    OUT_DIR = os.path.join("outputs", os.path.splitext(os.path.basename(__file__))[0])
+    os.makedirs(OUT_DIR, exist_ok=True)
 
     tts = Qwen3TTSModel.from_pretrained(
         MODEL_PATH,
         device_map=device,
-        dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
+        dtype=dtype,
+        attn_implementation=normalize_attn_implementation("flash_attention_2", device),
     )
 
     # -------- Single --------
-    torch.cuda.synchronize()
+    synchronize_device(device)
     t0 = time.time()
 
     wavs, sr = tts.generate_voice_design(
@@ -41,11 +46,11 @@ def main():
         instruct="体现撒娇稚嫩的萝莉女声，音调偏高且起伏明显，营造出黏人、做作又刻意卖萌的听觉效果。",
     )
 
-    torch.cuda.synchronize()
+    synchronize_device(device)
     t1 = time.time()
     print(f"[VoiceDesign Single] time: {t1 - t0:.3f}s")
 
-    sf.write("qwen3_tts_test_voice_design_single.wav", wavs[0], sr)
+    sf.write(os.path.join(OUT_DIR, "single.wav"), wavs[0], sr)
 
     # -------- Batch --------
     texts = [
@@ -58,7 +63,7 @@ def main():
         "Speak in an incredulous tone, but with a hint of panic beginning to creep into your voice."
     ]
 
-    torch.cuda.synchronize()
+    synchronize_device(device)
     t0 = time.time()
 
     wavs, sr = tts.generate_voice_design(
@@ -68,12 +73,12 @@ def main():
         max_new_tokens=2048,
     )
 
-    torch.cuda.synchronize()
+    synchronize_device(device)
     t1 = time.time()
     print(f"[VoiceDesign Batch] time: {t1 - t0:.3f}s")
 
     for i, w in enumerate(wavs):
-        sf.write(f"qwen3_tts_test_voice_design_batch_{i}.wav", w, sr)
+        sf.write(os.path.join(OUT_DIR, f"batch_{i}.wav"), w, sr)
 
 
 if __name__ == "__main__":

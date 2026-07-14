@@ -22,3 +22,10 @@ wheels/
 .vscode/
 venv/
 env/
+
+# example/*.py里默认的模型checkpoints路径
+Qwen/
+
+# example 脚本生成的音频输出目录
+outputs/
+*.wav
