@@ -28,6 +28,7 @@ import numpy as np
 import torch
 
 from .. import Qwen3TTSModel, VoiceClonePromptItem
+from ..inference.backend_utils import default_device, normalize_attn_implementation, normalize_device_name, normalize_dtype_for_device
 
 
 def _title_case_display(s: str) -> str:
@@ -91,8 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Model loading / from_pretrained args
     parser.add_argument(
         "--device",
-        default="cuda:0",
-        help="Device for device_map, e.g. cpu, cuda, cuda:0 (default: cuda:0).",
+        default=default_device(),
+        help="Device for device_map, e.g. cpu, mps, mlx, cuda, cuda:0 (default: auto-detect).",
     )
     parser.add_argument(
         "--dtype",
@@ -602,12 +603,12 @@ def main(argv=None) -> int:
 
     ckpt = _resolve_checkpoint(args)
 
-    dtype = _dtype_from_str(args.dtype)
-    attn_impl = "flash_attention_2" if args.flash_attn else None
+    dtype = normalize_dtype_for_device(_dtype_from_str(args.dtype), normalize_device_name(args.device))
+    attn_impl = normalize_attn_implementation("flash_attention_2" if args.flash_attn else None, args.device)
 
     tts = Qwen3TTSModel.from_pretrained(
         ckpt,
-        device_map=args.device,
+        device_map=normalize_device_name(args.device),
         dtype=dtype,
         attn_implementation=attn_impl,
     )
