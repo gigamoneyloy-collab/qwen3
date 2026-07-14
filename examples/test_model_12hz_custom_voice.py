@@ -56,7 +56,7 @@ def main():
     speakers = ["Vivian", "Ryan"]
     instructs = ["", "Very happy."]
 
-    torch.cuda.synchronize()
+    synchronize_device(device)
     t0 = time.time()
 
     wavs, sr = tts.generate_custom_voice(

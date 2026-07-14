@@ -60,7 +60,7 @@ def main():
         "Speak in an incredulous tone, but with a hint of panic beginning to creep into your voice."
     ]
 
-    torch.cuda.synchronize()
+    synchronize_device(device)
     t0 = time.time()
 
     wavs, sr = tts.generate_voice_design(
