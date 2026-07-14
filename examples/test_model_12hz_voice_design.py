@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import time
 import torch
 import soundfile as sf
@@ -25,6 +26,8 @@ def main():
     device = default_device()
     dtype = normalize_dtype_for_device(torch.bfloat16, device)
     MODEL_PATH = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign/"
+    OUT_DIR = os.path.join("outputs", os.path.splitext(os.path.basename(__file__))[0])
+    os.makedirs(OUT_DIR, exist_ok=True)
 
     tts = Qwen3TTSModel.from_pretrained(
         MODEL_PATH,
@@ -47,7 +50,7 @@ def main():
     t1 = time.time()
     print(f"[VoiceDesign Single] time: {t1 - t0:.3f}s")
 
-    sf.write("qwen3_tts_test_voice_design_single.wav", wavs[0], sr)
+    sf.write(os.path.join(OUT_DIR, "single.wav"), wavs[0], sr)
 
     # -------- Batch --------
     texts = [
@@ -75,7 +78,7 @@ def main():
     print(f"[VoiceDesign Batch] time: {t1 - t0:.3f}s")
 
     for i, w in enumerate(wavs):
-        sf.write(f"qwen3_tts_test_voice_design_batch_{i}.wav", w, sr)
+        sf.write(os.path.join(OUT_DIR, f"batch_{i}.wav"), w, sr)
 
 
 if __name__ == "__main__":

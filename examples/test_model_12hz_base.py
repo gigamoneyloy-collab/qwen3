@@ -44,7 +44,7 @@ def main():
     device = default_device()
     dtype = normalize_dtype_for_device(torch.bfloat16, device)
     MODEL_PATH = "Qwen/Qwen3-TTS-12Hz-1.7B-Base/"
-    OUT_DIR = "qwen3_tts_test_voice_clone_output_wav"
+    OUT_DIR = os.path.join("outputs", os.path.splitext(os.path.basename(__file__))[0])
     ensure_dir(OUT_DIR)
 
     tts = Qwen3TTSModel.from_pretrained(

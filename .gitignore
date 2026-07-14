@@ -27,5 +27,5 @@ env/
 Qwen/
 
 # example 脚本生成的音频输出目录
-qwen3_tts_test_voice_clone_output_wav/
+outputs/
 *.wav
