@@ -1,0 +1,91 @@
+diff --git a/src/layer/vulkan/rotaryembed_vulkan.cpp b/src/layer/vulkan/rotaryembed_vulkan.cpp
+index f3376357..d8ce4be2 100644
+--- a/src/layer/vulkan/rotaryembed_vulkan.cpp
++++ b/src/layer/vulkan/rotaryembed_vulkan.cpp
+@@ -21,12 +21,13 @@ int RotaryEmbed_vulkan::create_pipeline(const Option& opt)
+ {
+     const Mat& shape = bottom_shapes.empty() ? Mat() : bottom_shapes[0];
+
+-    std::vector<vk_specialization_type> specializations(1 + 4);
++    std::vector<vk_specialization_type> specializations(1 + 5);
+     specializations[0].i = interleaved;
+     specializations[1 + 0].i = shape.w;
+     specializations[1 + 1].i = shape.h;
+     specializations[1 + 2].i = shape.c;
+     specializations[1 + 3].i = (int)shape.cstep;
++    specializations[1 + 4].i = bottom_shapes.size() > 1 ? bottom_shapes[1].w : 0;
+
+     Mat local_size_xyz;
+     if (shape.dims == 3)
+@@ -111,11 +112,12 @@ int RotaryEmbed_vulkan::forward(const std::vector<VkMat>& bottom_blobs, std::vec
+     bindings[2] = sin_cache_unpacked;
+     bindings[3] = top_blob;
+
+-    std::vector<vk_constant_type> constants(4);
++    std::vector<vk_constant_type> constants(5);
+     constants[0].i = embed_dim;
+     constants[1].i = seqlen;
+     constants[2].i = num_heads;
+     constants[3].i = (int)bottom_blob.cstep;
++    constants[4].i = cos_cache.w;
+
+     VkMat dispatcher;
+     dispatcher.w = embed_dim / 2;
+diff --git a/src/layer/vulkan/shader/rotaryembed.comp b/src/layer/vulkan/shader/rotaryembed.comp
+index 56539cd6..e6377d61 100644
+--- a/src/layer/vulkan/shader/rotaryembed.comp
++++ b/src/layer/vulkan/shader/rotaryembed.comp
+@@ -11,6 +11,7 @@ layout(constant_id = shape_constant_id_offset + 0) const int embed_dim = 0;
+ layout(constant_id = shape_constant_id_offset + 1) const int seqlen = 0;
+ layout(constant_id = shape_constant_id_offset + 2) const int num_heads = 0;
+ layout(constant_id = shape_constant_id_offset + 3) const int cstep = 0;
++layout(constant_id = shape_constant_id_offset + 4) const int cos_dim = 0;
+
+ layout(binding = 0) readonly buffer bottom_blob { sfp bottom_blob_data[]; };
+ layout(binding = 1) readonly buffer cos_cache { sfp cos_cache_data[]; };
+@@ -23,6 +24,7 @@ layout(push_constant) uniform parameter
+     int seqlen;
+     int num_heads;
+     int cstep;
++    int cos_dim;
+ } p;
+
+ void main()
+@@ -36,7 +38,7 @@ void main()
+     if (gx >= halfdim || gy >= psc(seqlen) || gz >= psc(num_heads))
+         return;
+
+-    const int cache_offset = gy * halfdim + gx;
++    const int cache_offset = gy * psc(cos_dim) + gx;
+
+     afp cosv = buffer_ld1(cos_cache_data, cache_offset);
+     afp sinv = buffer_ld1(sin_cache_data, cache_offset);
+diff --git a/src/layer/vulkan/shader/rotaryembed_pack4.comp b/src/layer/vulkan/shader/rotaryembed_pack4.comp
+index 331b2bd1..fe107262 100644
+--- a/src/layer/vulkan/shader/rotaryembed_pack4.comp
++++ b/src/layer/vulkan/shader/rotaryembed_pack4.comp
+@@ -11,6 +11,7 @@ layout(constant_id = shape_constant_id_offset + 0) const int embed_dim = 0;
+ layout(constant_id = shape_constant_id_offset + 1) const int seqlen = 0;
+ layout(constant_id = shape_constant_id_offset + 2) const int num_heads = 0;
+ layout(constant_id = shape_constant_id_offset + 3) const int cstep = 0;
++layout(constant_id = shape_constant_id_offset + 4) const int cos_dim = 0;
+
+ layout(binding = 0) readonly buffer bottom_blob { sfpvec4 bottom_blob_data[]; };
+ layout(binding = 1) readonly buffer cos_cache { sfp cos_cache_data[]; };
+@@ -23,6 +24,7 @@ layout(push_constant) uniform parameter
+     int seqlen;
+     int num_heads;
+     int cstep;
++    int cos_dim;
+ } p;
+
+ void main()
+@@ -36,7 +38,7 @@ void main()
+     if (gx >= halfdim || gy >= psc(seqlen) || gz >= psc(num_heads))
+         return;
+
+-    const int cache_offset = gy * halfdim + gx;
++    const int cache_offset = gy * psc(cos_dim) + gx;
+
+     afp cosv = buffer_ld1(cos_cache_data, cache_offset);
+     afp sinv = buffer_ld1(sin_cache_data, cache_offset);

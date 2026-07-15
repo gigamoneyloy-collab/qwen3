@@ -1,0 +1,217 @@
+diff --git a/src/layer/vulkan/gelu_vulkan.cpp b/src/layer/vulkan/gelu_vulkan.cpp
+index c7b55b91..4bd0cc66 100644
+--- a/src/layer/vulkan/gelu_vulkan.cpp
++++ b/src/layer/vulkan/gelu_vulkan.cpp
+@@ -19,8 +19,9 @@ int GELU_vulkan::create_pipeline(const Option& opt)
+ {
+     const Mat& shape = top_shapes.empty() ? Mat() : top_shapes[0];
+
+-    std::vector<vk_specialization_type> specializations(1);
++    std::vector<vk_specialization_type> specializations(2);
+     specializations[0].u32 = shape.total() * shape.elempack / 4;
++    specializations[1].i = fast_gelu;
+
+     const int local_size_x = vkdev->info.subgroup_size();
+
+diff --git a/src/layer/vulkan/rotaryembed_vulkan.cpp b/src/layer/vulkan/rotaryembed_vulkan.cpp
+index f3376357..d8ce4be2 100644
+--- a/src/layer/vulkan/rotaryembed_vulkan.cpp
++++ b/src/layer/vulkan/rotaryembed_vulkan.cpp
+@@ -21,12 +21,13 @@ int RotaryEmbed_vulkan::create_pipeline(const Option& opt)
+ {
+     const Mat& shape = bottom_shapes.empty() ? Mat() : bottom_shapes[0];
+
+-    std::vector<vk_specialization_type> specializations(1 + 4);
++    std::vector<vk_specialization_type> specializations(1 + 5);
+     specializations[0].i = interleaved;
+     specializations[1 + 0].i = shape.w;
+     specializations[1 + 1].i = shape.h;
+     specializations[1 + 2].i = shape.c;
+     specializations[1 + 3].i = (int)shape.cstep;
++    specializations[1 + 4].i = bottom_shapes.size() > 1 ? bottom_shapes[1].w : 0;
+
+     Mat local_size_xyz;
+     if (shape.dims == 3)
+@@ -111,11 +112,12 @@ int RotaryEmbed_vulkan::forward(const std::vector<VkMat>& bottom_blobs, std::vec
+     bindings[2] = sin_cache_unpacked;
+     bindings[3] = top_blob;
+
+-    std::vector<vk_constant_type> constants(4);
++    std::vector<vk_constant_type> constants(5);
+     constants[0].i = embed_dim;
+     constants[1].i = seqlen;
+     constants[2].i = num_heads;
+     constants[3].i = (int)bottom_blob.cstep;
++    constants[4].i = cos_cache.w;
+
+     VkMat dispatcher;
+     dispatcher.w = embed_dim / 2;
+diff --git a/src/layer/vulkan/sdpa_vulkan.cpp b/src/layer/vulkan/sdpa_vulkan.cpp
+index 42898be9..6675aa37 100644
+--- a/src/layer/vulkan/sdpa_vulkan.cpp
++++ b/src/layer/vulkan/sdpa_vulkan.cpp
+@@ -8,6 +8,19 @@
+
+ namespace ncnn {
+
++static int sdpa_attn_mask_dims_for_shader(const VkMat& attn_mask_blob)
++{
++    if (attn_mask_blob.empty())
++        return 0;
++
++    // CPU SDPA broadcasts c==1 mask to all heads. The shader uses dims==3 to
++    // select per-head mask via gz * mask_cstep, so c==1 must not be reported as 3.
++    if (attn_mask_blob.dims == 3 && attn_mask_blob.c <= 1)
++        return 2;
++
++    return attn_mask_blob.dims;
++}
++
+ SDPA_vulkan::SDPA_vulkan()
+ {
+     support_vulkan = true;
+@@ -462,7 +475,7 @@ int SDPA_vulkan::forward(const std::vector<VkMat>& bottom_blobs, std::vector<VkM
+             constants[3].i = embed_dim;
+             constants[4].i = out_embed_dim;
+             constants[5].i = num_heads;
+-            constants[6].i = attn_mask_blob.dims && attn_mask_blob.c > 1 ? 3 : attn_mask_blob.dims;
++            constants[6].i = sdpa_attn_mask_dims_for_shader(attn_mask_blob);
+             constants[7].i = num_heads_per_group;
+             constants[8].i = query.cstep;
+             constants[9].i = key.cstep;
+@@ -500,7 +513,7 @@ int SDPA_vulkan::forward(const std::vector<VkMat>& bottom_blobs, std::vector<VkM
+             constants[3].i = embed_dim;
+             constants[4].i = out_embed_dim;
+             constants[5].i = num_heads;
+-            constants[6].i = attn_mask_blob.dims && attn_mask_blob.c > 1 ? 3 : attn_mask_blob.dims;
++            constants[6].i = sdpa_attn_mask_dims_for_shader(attn_mask_blob);
+             constants[7].i = num_heads_per_group;
+             constants[8].i = query.cstep;
+             constants[9].i = key.cstep;
+@@ -557,7 +570,7 @@ int SDPA_vulkan::forward(const std::vector<VkMat>& bottom_blobs, std::vector<VkM
+         constants[2].i = N;
+         constants[3].i = K;
+         constants[4].i = B;
+-        constants[5].i = attn_mask_blob.dims;
++        constants[5].i = sdpa_attn_mask_dims_for_shader(attn_mask_blob);
+         constants[6].i = num_heads_per_group;
+         constants[7].i = query.cstep;
+         constants[8].i = key.cstep;
+diff --git a/src/layer/vulkan/shader/gelu.comp b/src/layer/vulkan/shader/gelu.comp
+index 3c657518..8e5a2e91 100644
+--- a/src/layer/vulkan/shader/gelu.comp
++++ b/src/layer/vulkan/shader/gelu.comp
+@@ -5,6 +5,7 @@
+
+ #define shape_constant_id_offset 0
+ layout(constant_id = 0) const uint n = 0;
++layout(constant_id = 1) const int fast_gelu = 0;
+
+ layout(binding = 0) buffer bottom_top_blob { sfpvec4 bottom_top_blob_data[]; };
+
+@@ -13,6 +14,23 @@ layout(push_constant) uniform parameter
+     uint n;
+ } p;
+
++afpvec4 gelu_erf(afpvec4 x)
++{
++    afpvec4 a1 = afpvec4(0.254829592f);
++    afpvec4 a2 = afpvec4(-0.284496736f);
++    afpvec4 a3 = afpvec4(1.421413741f);
++    afpvec4 a4 = afpvec4(-1.453152027f);
++    afpvec4 a5 = afpvec4(1.061405429f);
++    afpvec4 p = afpvec4(0.3275911f);
++    afpvec4 y = x * afpvec4(0.70710678f);
++    afpvec4 s = sign(y);
++    afpvec4 y_abs = abs(y);
++    afpvec4 t = afpvec4(1.0f) / (afpvec4(1.0f) + p * y_abs);
++    afpvec4 erf_y = afpvec4(1.0f) - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * exp(-y_abs * y_abs);
++    erf_y = s * erf_y;
++    return afpvec4(0.5f) * x * (afpvec4(1.0f) + erf_y);
++}
++
+ void main()
+ {
+     uint gi = gl_GlobalInvocationID.x;
+@@ -22,13 +40,20 @@ void main()
+
+     afpvec4 v = buffer_ld4(bottom_top_blob_data, gi);
+
+-    // y = 0.5x * (1 + tanh(sqrt(2/Pi) * (x + 0.044715x^3)))
++    if (fast_gelu == 0)
++    {
++        v = gelu_erf(v);
++    }
++    else
++    {
++        // y = 0.5x * (1 + tanh(sqrt(2/Pi) * (x + 0.044715x^3)))
+
+ #if NCNN_moltenvk
+-    v = afpvec4(0.5f) * v * (afpvec4(1.0f) + afpvec4(tanh(vec4(afpvec4(0.79788452f) * (v + afpvec4(0.044715f) * v * v * v)))));
++        v = afpvec4(0.5f) * v * (afpvec4(1.0f) + afpvec4(tanh(vec4(afpvec4(0.79788452f) * (v + afpvec4(0.044715f) * v * v * v)))));
+ #else
+-    v = afpvec4(0.5f) * v * (afpvec4(1.0f) + tanh(afpvec4(0.79788452f) * (v + afpvec4(0.044715f) * v * v * v)));
++        v = afpvec4(0.5f) * v * (afpvec4(1.0f) + tanh(afpvec4(0.79788452f) * (v + afpvec4(0.044715f) * v * v * v)));
+ #endif
++    }
+
+     buffer_st4(bottom_top_blob_data, gi, v);
+ }
+diff --git a/src/layer/vulkan/shader/rotaryembed.comp b/src/layer/vulkan/shader/rotaryembed.comp
+index 56539cd6..e6377d61 100644
+--- a/src/layer/vulkan/shader/rotaryembed.comp
++++ b/src/layer/vulkan/shader/rotaryembed.comp
+@@ -11,6 +11,7 @@ layout(constant_id = shape_constant_id_offset + 0) const int embed_dim = 0;
+ layout(constant_id = shape_constant_id_offset + 1) const int seqlen = 0;
+ layout(constant_id = shape_constant_id_offset + 2) const int num_heads = 0;
+ layout(constant_id = shape_constant_id_offset + 3) const int cstep = 0;
++layout(constant_id = shape_constant_id_offset + 4) const int cos_dim = 0;
+
+ layout(binding = 0) readonly buffer bottom_blob { sfp bottom_blob_data[]; };
+ layout(binding = 1) readonly buffer cos_cache { sfp cos_cache_data[]; };
+@@ -23,6 +24,7 @@ layout(push_constant) uniform parameter
+     int seqlen;
+     int num_heads;
+     int cstep;
++    int cos_dim;
+ } p;
+
+ void main()
+@@ -36,7 +38,7 @@ void main()
+     if (gx >= halfdim || gy >= psc(seqlen) || gz >= psc(num_heads))
+         return;
+
+-    const int cache_offset = gy * halfdim + gx;
++    const int cache_offset = gy * psc(cos_dim) + gx;
+
+     afp cosv = buffer_ld1(cos_cache_data, cache_offset);
+     afp sinv = buffer_ld1(sin_cache_data, cache_offset);
+diff --git a/src/layer/vulkan/shader/rotaryembed_pack4.comp b/src/layer/vulkan/shader/rotaryembed_pack4.comp
+index 331b2bd1..fe107262 100644
+--- a/src/layer/vulkan/shader/rotaryembed_pack4.comp
++++ b/src/layer/vulkan/shader/rotaryembed_pack4.comp
+@@ -11,6 +11,7 @@ layout(constant_id = shape_constant_id_offset + 0) const int embed_dim = 0;
+ layout(constant_id = shape_constant_id_offset + 1) const int seqlen = 0;
+ layout(constant_id = shape_constant_id_offset + 2) const int num_heads = 0;
+ layout(constant_id = shape_constant_id_offset + 3) const int cstep = 0;
++layout(constant_id = shape_constant_id_offset + 4) const int cos_dim = 0;
+
+ layout(binding = 0) readonly buffer bottom_blob { sfpvec4 bottom_blob_data[]; };
+ layout(binding = 1) readonly buffer cos_cache { sfp cos_cache_data[]; };
+@@ -23,6 +24,7 @@ layout(push_constant) uniform parameter
+     int seqlen;
+     int num_heads;
+     int cstep;
++    int cos_dim;
+ } p;
+
+ void main()
+@@ -36,7 +38,7 @@ void main()
+     if (gx >= halfdim || gy >= psc(seqlen) || gz >= psc(num_heads))
+         return;
+
+-    const int cache_offset = gy * halfdim + gx;
++    const int cache_offset = gy * psc(cos_dim) + gx;
+
+     afp cosv = buffer_ld1(cos_cache_data, cache_offset);
+     afp sinv = buffer_ld1(sin_cache_data, cache_offset);

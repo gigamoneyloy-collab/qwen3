@@ -26,6 +26,7 @@ We release **Qwen3-TTS**, a series of powerful speech generation capabilities de
   - [Model Architecture](#model-architecture)
   - [Released Models Description and Download](#released-models-description-and-download)
 - [Quickstart](#quickstart)
+  - [ncnn / pnnx deployment](#ncnn--pnnx-deployment)
   - [Environment Setup](#environment-setup)
   - [Python Package Usage](#python-package-usage)
     - [Custom Voice Generation](#custom-voice-generate)
@@ -102,6 +103,19 @@ huggingface-cli download Qwen/Qwen3-TTS-12Hz-0.6B-Base --local-dir ./Qwen3-TTS-1
 
 
 ## Quickstart
+
+### ncnn / pnnx deployment
+
+The [`ncnn/`](ncnn/) directory provides an offline C++ implementation of the
+Qwen3-TTS-12Hz-0.6B-CustomVoice path, pnnx conversion tools, portable CMake
+builds, generated WAV samples, and numerical-parity documentation.
+
+```bash
+cmake -S ncnn -B build-ncnn-tts -G Ninja \
+  -DCMAKE_PREFIX_PATH=/path/to/ncnn/install
+cmake --build build-ncnn-tts --parallel
+ctest --test-dir build-ncnn-tts --output-on-failure
+```
 
 ### Environment Setup
 

@@ -1,0 +1,61 @@
+# Build outputs
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+*.ninja
+*.sln
+*.vcxproj*
+*.obj
+*.o
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Python/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Generated model and validation artifacts
+assets/
+models/
+*.safetensors
+*.pt
+*.onnx
+*.ncnn.bin
+*.f32
+*.f32.bin
+*.i32
+*.i32.bin
+*.npy
+*.npz
+*.wav
+*.pcm
+
+# Keep small public demo wavs.
+!samples/
+!samples/*.wav
+
+# Local logs and scratch files
+logs/
+runs/
+tmp/
+*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
