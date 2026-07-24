@@ -57,7 +57,17 @@ def train():
     dataset = TTSDataset(train_data, qwen3tts.processor, config)
     train_dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dataset.collate_fn)
 
-    optimizer = AdamW(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)
+    # speaker_encoder is only used to extract a detached speaker vector for conditioning /
+    # checkpoint identity. It must not be optimized: AdamW weight_decay still shrinks
+    # its weights even when gradients are ~0 (because of .detach()), which silently
+    # corrupts speaker embeddings over long SFT runs. See PR description for risk notes.
+    if hasattr(qwen3tts.model, "speaker_encoder") and qwen3tts.model.speaker_encoder is not None:
+        qwen3tts.model.speaker_encoder.requires_grad_(False)
+    trainable_params = [
+        p for n, p in qwen3tts.model.named_parameters()
+        if p.requires_grad and not n.startswith("speaker_encoder")
+    ]
+    optimizer = AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
 
     model, optimizer, train_dataloader = accelerator.prepare(
         qwen3tts.model, optimizer, train_dataloader
@@ -79,9 +89,15 @@ def train():
                 codec_0_labels = batch['codec_0_labels']
                 codec_mask = batch['codec_mask']
 
-                speaker_embedding = model.speaker_encoder(ref_mels.to(model.device).to(model.dtype)).detach()
+                # Extract once, lock the first observation, then reuse it for training so
+                # conditioning matches the vector written into codec_embedding at save time
+                # (CustomVoice inference also uses that fixed row, not a live encoder).
+                extracted = model.speaker_encoder(ref_mels.to(model.device).to(model.dtype)).detach()
                 if target_speaker_embedding is None:
-                    target_speaker_embedding = speaker_embedding
+                    target_speaker_embedding = extracted[:1].detach().clone()
+                speaker_embedding = target_speaker_embedding.to(
+                    device=extracted.device, dtype=extracted.dtype
+                ).expand(extracted.size(0), -1)
 
                 input_text_ids = input_ids[:, :, 0]
                 input_codec_ids = input_ids[:, :, 1]
