@@ -1296,7 +1296,7 @@ class Qwen3TTSTalkerCodePredictorModelForConditionalGeneration(Qwen3TTSPreTraine
         )
 
         hidden_states = outputs.last_hidden_state
-        logits = self.lm_head[generation_steps](hidden_states)
+        logits = self.lm_head[generation_steps](hidden_states).float()
 
         loss = None
         if labels is not None:
@@ -1724,7 +1724,7 @@ class Qwen3TTSTalkerForConditionalGeneration(Qwen3TTSTalkerTextPreTrainedModel, 
         )
 
         hidden_states = outputs.last_hidden_state
-        logits = self.codec_head(hidden_states)
+        logits = self.codec_head(hidden_states).float()
 
         loss = None
         if labels is not None:
