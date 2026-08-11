@@ -17,7 +17,6 @@ import sox
 import copy
 import torch
 import operator
-import onnxruntime
 
 import torch.nn as nn
 import torch.nn.functional as F
@@ -117,6 +116,10 @@ class MelSpectrogramFeatures(nn.Module):
 
 class XVectorExtractor(nn.Module):
     def __init__(self, audio_codec_with_xvector):
+        # ONNX Runtime is only needed when the 25 Hz tokenizer initializes
+        # its CAMPPlus x-vector extractor.
+        import onnxruntime
+
         super().__init__()
         option = onnxruntime.SessionOptions()
         option.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
