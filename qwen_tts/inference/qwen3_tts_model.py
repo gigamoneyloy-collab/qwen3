@@ -475,7 +475,7 @@ class Qwen3TTSModel:
         ref_text: Optional[Union[str, List[Optional[str]]]] = None,
         x_vector_only_mode: Union[bool, List[bool]] = False,
         voice_clone_prompt: Optional[Union[Dict[str, Any], List[VoiceClonePromptItem]]] = None,
-        non_streaming_mode: bool = False,
+        non_streaming_mode: bool = True,
         **kwargs,
     ) -> Tuple[List[np.ndarray], int]:
         """
@@ -511,8 +511,20 @@ class Qwen3TTSModel:
             voice_clone_prompt:
                 list[VoiceClonePromptItem] from `create_voice_clone_prompt`.
             non_streaming_mode:
-                Using non-streaming text input, this option currently only simulates streaming text input when set to `false`, 
-                rather than enabling true streaming input or streaming generation.
+                If True (default), the full target text is placed in the prompt
+                before generation begins -- the same layout CustomVoice and
+                VoiceDesign use -- which keeps the speaking rate uniform across
+                the whole generation. Recommended for offline synthesis.
+                If False, streaming text input is simulated: the target text is
+                fed one token per codec frame (12.5 tokens/s). Because that is
+                several times faster than speech consumes text, the model
+                accumulates an ever-growing text backlog and the speaking rate
+                climbs over long generations (see issue #239). The effect is
+                strongly aggravated by long reference audio, whose prompt
+                frames pre-consume the target text feed: with a reference
+                longer than ~5s, most of a typical utterance's text has been
+                delivered before the first frame is generated. If you need
+                streaming, keep the reference under ~5 seconds.
             do_sample:
                 Whether to use sampling, recommended to be set to `true` for most use cases.
             top_k:
