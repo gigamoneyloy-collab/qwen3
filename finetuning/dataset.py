@@ -140,14 +140,19 @@ class TTSDataset(Dataset):
         return {
             "text_ids": text_ids[:,:-5],    # 1 , t
             "audio_codes":audio_codes,      # t, 16
-            "ref_mel":ref_mel
+            "ref_mel":ref_mel,
+            "language":language
         }
         
     def collate_fn(self, batch):
         assert self.lag_num == -1
 
         item_length = [b['text_ids'].shape[1] + b['audio_codes'].shape[0] for b in batch]
-        max_length = max(item_length) + 8
+        # +9, not +8: every item now uses the 6-slot codec-channel template
+        # (mode_id, think_bos_id, language_id-or-pad, think_eos_id, speaker_emb,
+        # pad_id) uniformly, one slot wider than the old always-nothink 5-slot
+        # template, so per-item language does not misalign batch indices.
+        max_length = max(item_length) + 9
         b,t = len(batch),max_length
 
         input_ids   = torch.zeros((b,t,2),dtype=torch.long)
@@ -167,41 +172,68 @@ class TTSDataset(Dataset):
             codec_ids_len = audio_codec_0.shape[0]
             
             # text channel
+            # Offsets shifted +1 throughout (8->9 etc.) vs the original, to make
+            # room for the codec channel's extra language-id slot below — every
+            # item uses this wider layout uniformly, whether or not it actually
+            # has a recognized language, so batch indices always line up.
             input_ids[i,  :3, 0] = text_ids[0,:3]
-            input_ids[i, 3:7, 0] = self.config.tts_pad_token_id
-            input_ids[i,   7, 0] = self.config.tts_bos_token_id
-            input_ids[i, 8:8+text_ids_len-3, 0] = text_ids[0,3:]
-            input_ids[i,   8+text_ids_len-3, 0] = self.config.tts_eos_token_id
-            input_ids[i, 8+text_ids_len-2:8+text_ids_len+codec_ids_len , 0] = self.config.tts_pad_token_id
-            text_embedding_mask[i,  :8+text_ids_len+codec_ids_len] = True
+            input_ids[i, 3:8, 0] = self.config.tts_pad_token_id
+            input_ids[i,   8, 0] = self.config.tts_bos_token_id
+            input_ids[i, 9:9+text_ids_len-3, 0] = text_ids[0,3:]
+            input_ids[i,   9+text_ids_len-3, 0] = self.config.tts_eos_token_id
+            input_ids[i, 9+text_ids_len-2:9+text_ids_len+codec_ids_len , 0] = self.config.tts_pad_token_id
+            text_embedding_mask[i,  :9+text_ids_len+codec_ids_len] = True
 
             # codec channel
             # input_ids[i,   :3, 1] = 0
-            input_ids[i,    3:8 ,1] = torch.tensor(
+            #
+            # Previously this always used the nothink (language-blind) pattern —
+            # the per-item `language` field was read in __getitem__ and then
+            # silently discarded, so the model never received any language
+            # signal during fine-tuning regardless of what the training data
+            # said (see issue #323). When `language` is one of the model's
+            # officially-supported languages, use the think pattern with the
+            # real language ID instead, so fine-tuning on a supported language
+            # actually conditions on it. Unset/unrecognized language falls back
+            # to nothink behavior — same mode as before, just laid out in the
+            # same 6-slot width as the language-aware case, so batches mixing
+            # recognized and unrecognized languages never misalign.
+            language = data.get('language', 'Auto')
+            language_id = self.config.talker_config.codec_language_id.get(
+                language.lower() if isinstance(language, str) else language
+            )
+            if language_id is not None:
+                mode_id = self.config.talker_config.codec_think_id
+            else:
+                mode_id = self.config.talker_config.codec_nothink_id
+                language_id = self.config.talker_config.codec_pad_id  # unused filler, keeps width uniform
+
+            input_ids[i,    3:9 ,1] = torch.tensor(
                                         [
-                                            self.config.talker_config.codec_nothink_id,
+                                            mode_id,
                                             self.config.talker_config.codec_think_bos_id,
+                                            language_id,
                                             self.config.talker_config.codec_think_eos_id,
                                             0,     # for speaker embedding
-                                            self.config.talker_config.codec_pad_id       
+                                            self.config.talker_config.codec_pad_id
                                         ]
                                     )
-            input_ids[i,    8:8+text_ids_len-3  ,1] = self.config.talker_config.codec_pad_id
-            input_ids[i,    8+text_ids_len-3    ,1] = self.config.talker_config.codec_pad_id
-            input_ids[i,    8+text_ids_len-2    ,1] = self.config.talker_config.codec_bos_id
-            input_ids[i,    8+text_ids_len-1:8+text_ids_len-1+codec_ids_len,    1] = audio_codec_0
-            input_ids[i,    8+text_ids_len-1+codec_ids_len,    1] = self.config.talker_config.codec_eos_token_id
+            input_ids[i,    9:9+text_ids_len-3  ,1] = self.config.talker_config.codec_pad_id
+            input_ids[i,    9+text_ids_len-3    ,1] = self.config.talker_config.codec_pad_id
+            input_ids[i,    9+text_ids_len-2    ,1] = self.config.talker_config.codec_bos_id
+            input_ids[i,    9+text_ids_len-1:9+text_ids_len-1+codec_ids_len,    1] = audio_codec_0
+            input_ids[i,    9+text_ids_len-1+codec_ids_len,    1] = self.config.talker_config.codec_eos_token_id
 
-            codec_0_labels[i,    8+text_ids_len-1:8+text_ids_len-1+codec_ids_len] = audio_codec_0
-            codec_0_labels[i,    8+text_ids_len-1+codec_ids_len] = self.config.talker_config.codec_eos_token_id
+            codec_0_labels[i,    9+text_ids_len-1:9+text_ids_len-1+codec_ids_len] = audio_codec_0
+            codec_0_labels[i,    9+text_ids_len-1+codec_ids_len] = self.config.talker_config.codec_eos_token_id
 
-            codec_ids[i, 8+text_ids_len-1:8+text_ids_len-1+codec_ids_len,:] = audio_codecs
+            codec_ids[i, 9+text_ids_len-1:9+text_ids_len-1+codec_ids_len,:] = audio_codecs
 
-            codec_embedding_mask[i, 3:8+text_ids_len+codec_ids_len] = True
-            codec_embedding_mask[i, 6] = False       # for speaker embedding
+            codec_embedding_mask[i, 3:9+text_ids_len+codec_ids_len] = True
+            codec_embedding_mask[i, 7] = False       # for speaker embedding
 
-            codec_mask[i,   8+text_ids_len-1:8+text_ids_len-1+codec_ids_len] = True
-            attention_mask[i, :8+text_ids_len+codec_ids_len] = True
+            codec_mask[i,   9+text_ids_len-1:9+text_ids_len-1+codec_ids_len] = True
+            attention_mask[i, :9+text_ids_len+codec_ids_len] = True
         
         ref_mels = [data['ref_mel'] for data in batch]
         ref_mels = torch.cat(ref_mels,dim=0)
