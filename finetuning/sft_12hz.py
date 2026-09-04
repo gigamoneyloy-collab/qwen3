@@ -15,19 +15,24 @@
 # limitations under the License.
 import argparse
 import json
-import os
-import shutil
 
 import torch
 from accelerate import Accelerator
 from dataset import TTSDataset
-from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
-from safetensors.torch import save_file
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import AutoConfig
 
+from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
+
+try:
+    from .checkpoint_utils import save_finetuned_checkpoint
+except ImportError:
+    from checkpoint_utils import save_finetuned_checkpoint
+
 target_speaker_embedding = None
+
+
 def train():
     global target_speaker_embedding
 
@@ -124,38 +129,14 @@ def train():
                 accelerator.print(f"Epoch {epoch} | Step {step} | Loss: {loss.item():.4f}")
 
         if accelerator.is_main_process:
-            output_dir = os.path.join(args.output_model_path, f"checkpoint-epoch-{epoch}")
-            shutil.copytree(MODEL_PATH, output_dir, dirs_exist_ok=True)
-
-            input_config_file = os.path.join(MODEL_PATH, "config.json")
-            output_config_file = os.path.join(output_dir, "config.json")
-            with open(input_config_file, 'r', encoding='utf-8') as f:
-                config_dict = json.load(f)
-            config_dict["tts_model_type"] = "custom_voice"
-            talker_config = config_dict.get("talker_config", {})
-            talker_config["spk_id"] = {
-                args.speaker_name: 3000
-            }
-            talker_config["spk_is_dialect"] = {
-                args.speaker_name: False
-            }
-            config_dict["talker_config"] = talker_config
-
-            with open(output_config_file, 'w', encoding='utf-8') as f:
-                json.dump(config_dict, f, indent=2, ensure_ascii=False)
-
-            unwrapped_model = accelerator.unwrap_model(model)
-            state_dict = {k: v.detach().to("cpu") for k, v in unwrapped_model.state_dict().items()}
-
-            drop_prefix = "speaker_encoder"
-            keys_to_drop = [k for k in state_dict.keys() if k.startswith(drop_prefix)]
-            for k in keys_to_drop:
-                del state_dict[k]
-
-            weight = state_dict['talker.model.codec_embedding.weight']
-            state_dict['talker.model.codec_embedding.weight'][3000] = target_speaker_embedding[0].detach().to(weight.device).to(weight.dtype)
-            save_path = os.path.join(output_dir, "model.safetensors")
-            save_file(state_dict, save_path)
+            save_finetuned_checkpoint(
+                MODEL_PATH,
+                args.output_model_path,
+                f'checkpoint-epoch-{epoch}',
+                args.speaker_name,
+                accelerator.unwrap_model(model),
+                target_speaker_embedding,
+            )
 
 if __name__ == "__main__":
     train()
